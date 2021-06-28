@@ -1,0 +1,12 @@
+[bindle]
+name = "fancyweather"
+version = "2.3.4"
+
+[[handler]]
+route = "/assets"
+external = "deislabs/file-server/1.0.0:static.wasm"
+files = ["styles/*", "images/*"]
+
+[[handler]]
+route = "/..."
+name = "out/fake.wasm"
