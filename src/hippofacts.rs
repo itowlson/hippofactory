@@ -3,16 +3,33 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 use std::convert::TryFrom;
 
-// type FeatureMap = BTreeMap<String, BTreeMap<String, String>>;
-
 type AnnotationMap = BTreeMap<String, String>;
+
+// Raw on-disk forms, used only for deserialisation
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawHippoFacts {
+struct RawHippoFacts {
     pub bindle: BindleSpec,
     pub annotations: Option<AnnotationMap>,
     pub handler: Option<Vec<RawHandler>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawHandler {
+    name: Option<String>,
+    external: Option<String>,
+    pub route: String,
+    pub files: Option<Vec<String>>,
+}
+
+// A 'safe to use' form
+
+pub struct HippoFacts {
+    pub bindle: BindleSpec,
+    pub annotations: Option<AnnotationMap>,
+    pub handler: Vec<Handler>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -24,19 +41,10 @@ pub struct BindleSpec {
     pub authors: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RawHandler {
-    name: Option<String>,
-    external: Option<String>,
+pub struct Handler {
+    pub handler_module: HandlerModule,
     pub route: String,
     pub files: Option<Vec<String>>,
-}
-
-pub struct HippoFacts {
-    pub bindle: BindleSpec,
-    pub annotations: Option<AnnotationMap>,
-    pub handler: Vec<Handler>,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -51,14 +59,8 @@ pub struct ParcelReference {
     pub name: String,
 }
 
-pub struct Handler {
-    pub handler_module: HandlerModule,
-    pub route: String,
-    pub files: Option<Vec<String>>,
-}
-
 impl HippoFacts {
-    pub fn parse(raw: RawHippoFacts) -> anyhow::Result<Self> {
+    fn parse(raw: RawHippoFacts) -> anyhow::Result<Self> {
         let handlers = match raw.handler {
             None => Err(anyhow::anyhow!("Artifact spec must specify at least one handler")),
             Some(h) => {
@@ -84,7 +86,7 @@ impl HippoFacts {
 }
 
 impl Handler {
-    pub fn parse(raw: RawHandler) -> anyhow::Result<Self> {
+    fn parse(raw: RawHandler) -> anyhow::Result<Self> {
         let handler_module = raw.handler_module()?;
         Ok(Self {
             handler_module,
