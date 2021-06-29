@@ -100,11 +100,7 @@ fn expand_id(
 }
 
 fn expand_all_handlers_to_groups(hippofacts: &HippoFacts) -> anyhow::Result<Vec<Group>> {
-    let groups = hippofacts
-        .handler
-        .iter()
-        .map(expand_to_group)
-        .collect();
+    let groups = hippofacts.handler.iter().map(expand_to_group).collect();
     Ok(groups)
 }
 
@@ -127,33 +123,37 @@ async fn expand_handler_modules_to_parcels(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Vec<Parcel>> {
-    let conversions = hippofacts.handler.iter().map(|handler| convert_one_handler_module_to_parcel(handler, expansion_context));
+    let conversions = hippofacts
+        .handler
+        .iter()
+        .map(|handler| convert_one_handler_module_to_parcel(handler, expansion_context));
     let results = futures::future::join_all(conversions).await;
     results.into_iter().collect()
 }
 
 async fn convert_one_handler_module_to_parcel(
     handler: &Handler,
-    expansion_context: &ExpansionContext
+    expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Parcel> {
     let wagi_features = vec![("route", &handler.route[..]), ("file", "false")];
     match &handler.handler_module {
-        HandlerModule::File(name) =>
-            convert_one_match_to_parcel(
-                PathBuf::from(expansion_context.to_absolute(&name)),
-                expansion_context,
-                wagi_features,
-                None,
-                Some(&group_name(handler)),
-            ),
-        HandlerModule::External(parcel_ref) =>
+        HandlerModule::File(name) => convert_one_match_to_parcel(
+            PathBuf::from(expansion_context.to_absolute(&name)),
+            expansion_context,
+            wagi_features,
+            None,
+            Some(&group_name(handler)),
+        ),
+        HandlerModule::External(parcel_ref) => {
             convert_external_parcel_ref_to_parcel(
                 &parcel_ref,
                 expansion_context,
                 wagi_features,
                 None,
                 Some(&group_name(handler)),
-            ).await
+            )
+            .await
+        }
     }
 }
 
@@ -165,21 +165,47 @@ async fn convert_external_parcel_ref_to_parcel(
     requires: Option<&str>,
 ) -> anyhow::Result<Parcel> {
     match &expansion_context.bindle_server_url {
-        None => Err(anyhow::anyhow!("No Bindle server from which to get external reference {}:{}", parcel_ref.bindle_id, parcel_ref.name)),
+        None => Err(anyhow::anyhow!(
+            "No Bindle server from which to get external reference {}:{}",
+            parcel_ref.bindle_id,
+            parcel_ref.name
+        )),
         Some(bindle_server_url) => {
             let bindle_client = bindle::client::Client::new(bindle_server_url)?;
-            let source_invoice = bindle_client.get_yanked_invoice(&parcel_ref.bindle_id).await?;
+            let source_invoice = bindle_client
+                .get_yanked_invoice(&parcel_ref.bindle_id)
+                .await?;
             let source_parcels = source_invoice.parcel.unwrap_or_default();
-            let matching_parcels: Vec<_> = source_parcels.iter().filter(|p| p.label.name == parcel_ref.name).collect();
+            let matching_parcels: Vec<_> = source_parcels
+                .iter()
+                .filter(|p| p.label.name == parcel_ref.name)
+                .collect();
             if matching_parcels.len() == 0 {
-                return Err(anyhow::anyhow!("No parcels in bindle {} have name {}", parcel_ref.bindle_id, parcel_ref.name));
+                return Err(anyhow::anyhow!(
+                    "No parcels in bindle {} have name {}",
+                    parcel_ref.bindle_id,
+                    parcel_ref.name
+                ));
             }
             if matching_parcels.len() > 1 {
                 // TODO: provide a way to disambiguate
-                return Err(anyhow::anyhow!("Multiple parcels in bindle {} have name {}", parcel_ref.bindle_id, parcel_ref.name));
+                return Err(anyhow::anyhow!(
+                    "Multiple parcels in bindle {} have name {}",
+                    parcel_ref.bindle_id,
+                    parcel_ref.name
+                ));
             }
             let source_parcel = matching_parcels[0];
-            parcel_of(parcel_ref.name.clone(), source_parcel.label.sha256.clone(), source_parcel.label.media_type.clone(), source_parcel.label.size, wagi_features, member_of, requires)
+            // TODO: what should we do if the named parcel has a 'requires' clause?
+            parcel_of(
+                parcel_ref.name.clone(),
+                source_parcel.label.sha256.clone(),
+                source_parcel.label.media_type.clone(),
+                source_parcel.label.size,
+                wagi_features,
+                member_of,
+                requires,
+            )
         }
     }
 }
@@ -188,7 +214,8 @@ fn expand_all_files_to_parcels(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Vec<Parcel>> {
-    let parcel_lists = hippofacts.handler
+    let parcel_lists = hippofacts
+        .handler
         .iter()
         .map(|handler| expand_files_to_parcels(handler, expansion_context));
     let parcels = flatten_or_fail(parcel_lists)?;
@@ -256,10 +283,26 @@ fn convert_one_match_to_parcel(
         .first_or_octet_stream()
         .to_string();
 
-    parcel_of(name, digest_string, media_type, size, wagi_features, member_of, requires)
+    parcel_of(
+        name,
+        digest_string,
+        media_type,
+        size,
+        wagi_features,
+        member_of,
+        requires,
+    )
 }
 
-fn parcel_of(name: String, digest_string: String, media_type: String, size: u64, wagi_features: Vec<(&str, &str)>, member_of: Option<&str>, requires: Option<&str>) -> Result<Parcel, anyhow::Error> {
+fn parcel_of(
+    name: String,
+    digest_string: String,
+    media_type: String,
+    size: u64,
+    wagi_features: Vec<(&str, &str)>,
+    member_of: Option<&str>,
+    requires: Option<&str>,
+) -> Result<Parcel, anyhow::Error> {
     let feature = Some(wagi_feature_of(wagi_features));
     Ok(Parcel {
         label: Label {
@@ -429,7 +472,9 @@ mod test {
             invoice_versioning: InvoiceVersioning::Production,
             bindle_server_url: None,
         };
-        let invoice = expand(&hippofacts, &expansion_context).await.expect("error expanding");
+        let invoice = expand(&hippofacts, &expansion_context)
+            .await
+            .expect("error expanding");
         Ok(invoice)
     }
 

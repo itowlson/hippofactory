@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
 use std::convert::TryFrom;
+use std::{collections::BTreeMap, path::Path};
 
 type AnnotationMap = BTreeMap<String, String>;
 
@@ -62,14 +62,20 @@ pub struct ParcelReference {
 impl HippoFacts {
     fn parse(raw: RawHippoFacts) -> anyhow::Result<Self> {
         let handlers = match raw.handler {
-            None => Err(anyhow::anyhow!("Artifact spec must specify at least one handler")),
+            None => Err(anyhow::anyhow!(
+                "Artifact spec must specify at least one handler"
+            )),
             Some(h) => {
                 if h.len() == 0 {
-                    Err(anyhow::anyhow!("Artifact spec must specify at least one handler"))
+                    Err(anyhow::anyhow!(
+                        "Artifact spec must specify at least one handler"
+                    ))
                 } else {
-                    h.into_iter().map(|r| Handler::parse(r)).collect::<anyhow::Result<Vec<Handler>>>()
+                    h.into_iter()
+                        .map(|r| Handler::parse(r))
+                        .collect::<anyhow::Result<Vec<Handler>>>()
                 }
-            },
+            }
         }?;
         Ok(Self {
             bindle: raw.bindle,
@@ -100,9 +106,17 @@ impl RawHandler {
     pub fn handler_module(&self) -> anyhow::Result<HandlerModule> {
         match (&self.name, &self.external) {
             (Some(name), None) => Ok(HandlerModule::File(name.to_owned())),
-            (None, Some(parcel_ref)) => Ok(HandlerModule::External(ParcelReference::parse(parcel_ref)?)),
-            (None, None) => Err(anyhow::anyhow!("You must specify one of 'name' or 'external' in handler for {}", self.route)),
-            (Some(_), Some(_)) => Err(anyhow::anyhow!("You cannot specify both 'name' and 'external' in handler for {}", self.route)),
+            (None, Some(parcel_ref)) => {
+                Ok(HandlerModule::External(ParcelReference::parse(parcel_ref)?))
+            }
+            (None, None) => Err(anyhow::anyhow!(
+                "You must specify one of 'name' or 'external' in handler for {}",
+                self.route
+            )),
+            (Some(_), Some(_)) => Err(anyhow::anyhow!(
+                "You cannot specify both 'name' and 'external' in handler for {}",
+                self.route
+            )),
         }
     }
 }
@@ -113,10 +127,12 @@ impl ParcelReference {
         if bits.len() == 2 {
             Ok(Self {
                 bindle_id: bindle::Id::try_from(bits[0])?,
-                name: bits[1].to_owned()
+                name: bits[1].to_owned(),
             })
         } else {
-            Err(anyhow::anyhow!("External reference must be of the form 'bindle_id:parcel_name'"))
+            Err(anyhow::anyhow!(
+                "External reference must be of the form 'bindle_id:parcel_name'"
+            ))
         }
     }
 }
@@ -160,7 +176,10 @@ mod test {
 
         assert_eq!(2, handlers.len());
 
-        assert_eq!(&HandlerModule::File("penguin.wasm".to_owned()), &handlers[0].handler_module);
+        assert_eq!(
+            &HandlerModule::File("penguin.wasm".to_owned()),
+            &handlers[0].handler_module
+        );
         assert_eq!("/birds/flightless", &handlers[0].route);
         let files0 = handlers[0].files.as_ref().expect("Expected files");
         assert_eq!(3, files0.len());
@@ -169,7 +188,10 @@ mod test {
             bindle_id: bindle::Id::from_str("foo/bar/1.0.0").expect("malformed bindle id"),
             name: "cassowary.wasm".to_owned(),
         };
-        assert_eq!(&HandlerModule::External(expected_ref), &handlers[1].handler_module);
+        assert_eq!(
+            &HandlerModule::External(expected_ref),
+            &handlers[1].handler_module
+        );
         assert_eq!("/birds/savage/rending", &handlers[1].route);
         assert_eq!(None, handlers[1].files);
     }
