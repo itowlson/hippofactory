@@ -8,11 +8,12 @@ use glob::GlobError;
 use itertools::Itertools;
 use sha2::{Digest, Sha256};
 
-use crate::{hippofacts::Handler, HippoFacts};
+use crate::hippofacts::{Handler, HandlerModule, HippoFacts, ParcelReference};
 
 pub struct ExpansionContext {
     pub relative_to: PathBuf,
     pub invoice_versioning: InvoiceVersioning,
+    pub bindle_server_url: Option<String>,
 }
 
 impl ExpansionContext {
@@ -62,12 +63,12 @@ impl InvoiceVersioning {
     }
 }
 
-pub fn expand(
+pub async fn expand(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Invoice> {
     let groups = expand_all_handlers_to_groups(&hippofacts)?;
-    let handler_parcels = expand_handler_modules_to_parcels(&hippofacts, expansion_context)?;
+    let handler_parcels = expand_handler_modules_to_parcels(&hippofacts, expansion_context).await?;
     let file_parcels = expand_all_files_to_parcels(&hippofacts, expansion_context)?;
     let parcels = handler_parcels.into_iter().chain(file_parcels).collect();
 
@@ -101,8 +102,6 @@ fn expand_id(
 fn expand_all_handlers_to_groups(hippofacts: &HippoFacts) -> anyhow::Result<Vec<Group>> {
     let groups = hippofacts
         .handler
-        .as_ref()
-        .ok_or_else(no_handlers)?
         .iter()
         .map(expand_to_group)
         .collect();
@@ -118,32 +117,78 @@ fn expand_to_group(handler: &Handler) -> Group {
 }
 
 fn group_name(handler: &Handler) -> String {
-    format!("{}-files", handler.name)
+    match &handler.handler_module {
+        HandlerModule::File(name) => format!("{}-files", name),
+        HandlerModule::External(parcel_ref) => format!("{}-files", parcel_ref.name),
+    }
 }
 
-fn expand_handler_modules_to_parcels(
+async fn expand_handler_modules_to_parcels(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Vec<Parcel>> {
-    let handlers = hippofacts.handler.as_ref().ok_or_else(no_handlers)?;
-    let parcels = handlers.iter().map(|handler| {
-        convert_one_match_to_parcel(
-            PathBuf::from(expansion_context.to_absolute(&handler.name)),
-            expansion_context,
-            vec![("route", &handler.route), ("file", "false")],
-            None,
-            Some(&group_name(handler)),
-        )
-    });
-    parcels.collect()
+    let conversions = hippofacts.handler.iter().map(|handler| convert_one_handler_module_to_parcel(handler, expansion_context));
+    let results = futures::future::join_all(conversions).await;
+    results.into_iter().collect()
+}
+
+async fn convert_one_handler_module_to_parcel(
+    handler: &Handler,
+    expansion_context: &ExpansionContext
+) -> anyhow::Result<Parcel> {
+    let wagi_features = vec![("route", &handler.route[..]), ("file", "false")];
+    match &handler.handler_module {
+        HandlerModule::File(name) =>
+            convert_one_match_to_parcel(
+                PathBuf::from(expansion_context.to_absolute(&name)),
+                expansion_context,
+                wagi_features,
+                None,
+                Some(&group_name(handler)),
+            ),
+        HandlerModule::External(parcel_ref) =>
+            convert_external_parcel_ref_to_parcel(
+                &parcel_ref,
+                expansion_context,
+                wagi_features,
+                None,
+                Some(&group_name(handler)),
+            ).await
+    }
+}
+
+async fn convert_external_parcel_ref_to_parcel(
+    parcel_ref: &ParcelReference,
+    expansion_context: &ExpansionContext,
+    wagi_features: Vec<(&str, &str)>,
+    member_of: Option<&str>,
+    requires: Option<&str>,
+) -> anyhow::Result<Parcel> {
+    match &expansion_context.bindle_server_url {
+        None => Err(anyhow::anyhow!("No Bindle server from which to get external reference {}:{}", parcel_ref.bindle_id, parcel_ref.name)),
+        Some(bindle_server_url) => {
+            let bindle_client = bindle::client::Client::new(bindle_server_url)?;
+            let source_invoice = bindle_client.get_yanked_invoice(&parcel_ref.bindle_id).await?;
+            let source_parcels = source_invoice.parcel.unwrap_or_default();
+            let matching_parcels: Vec<_> = source_parcels.iter().filter(|p| p.label.name == parcel_ref.name).collect();
+            if matching_parcels.len() == 0 {
+                return Err(anyhow::anyhow!("No parcels in bindle {} have name {}", parcel_ref.bindle_id, parcel_ref.name));
+            }
+            if matching_parcels.len() > 1 {
+                // TODO: provide a way to disambiguate
+                return Err(anyhow::anyhow!("Multiple parcels in bindle {} have name {}", parcel_ref.bindle_id, parcel_ref.name));
+            }
+            let source_parcel = matching_parcels[0];
+            parcel_of(parcel_ref.name.clone(), source_parcel.label.sha256.clone(), source_parcel.label.media_type.clone(), source_parcel.label.size, wagi_features, member_of, requires)
+        }
+    }
 }
 
 fn expand_all_files_to_parcels(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Vec<Parcel>> {
-    let handlers = hippofacts.handler.as_ref().ok_or_else(no_handlers)?;
-    let parcel_lists = handlers
+    let parcel_lists = hippofacts.handler
         .iter()
         .map(|handler| expand_files_to_parcels(handler, expansion_context));
     let parcels = flatten_or_fail(parcel_lists)?;
@@ -211,9 +256,11 @@ fn convert_one_match_to_parcel(
         .first_or_octet_stream()
         .to_string();
 
-    // let features = vec![("route", route)];
-    let feature = Some(wagi_feature_of(wagi_features));
+    parcel_of(name, digest_string, media_type, size, wagi_features, member_of, requires)
+}
 
+fn parcel_of(name: String, digest_string: String, media_type: String, size: u64, wagi_features: Vec<(&str, &str)>, member_of: Option<&str>, requires: Option<&str>) -> Result<Parcel, anyhow::Error> {
+    let feature = Some(wagi_feature_of(wagi_features));
     Ok(Parcel {
         label: Label {
             name,
@@ -300,10 +347,6 @@ fn current_user() -> Option<String> {
         .ok()
 }
 
-fn no_handlers() -> anyhow::Error {
-    anyhow::anyhow!("No handlers defined in artifact spec")
-}
-
 fn file_id(parcel: &Parcel) -> String {
     // Two parcels with different names could refer to the same content.  We
     // don't want to treat them as the same parcel when deduplicating.
@@ -339,9 +382,7 @@ mod test {
     }
 
     fn read_hippofacts(path: impl AsRef<Path>) -> anyhow::Result<HippoFacts> {
-        let toml_text = std::fs::read_to_string(path)?;
-        let hippofacts: HippoFacts = toml::from_str(&toml_text)?;
-        Ok(hippofacts)
+        HippoFacts::read_from_file(path)
     }
 
     fn parcel_named<'a>(invoice: &'a Invoice, parcel_name: &str) -> &'a Parcel {
@@ -380,53 +421,54 @@ mod test {
             .unwrap()
     }
 
-    fn expand_test_invoice(name: &str) -> anyhow::Result<Invoice> {
+    async fn expand_test_invoice(name: &str) -> anyhow::Result<Invoice> {
         let dir = test_dir(name);
         let hippofacts = read_hippofacts(dir.join("HIPPOFACTS")).unwrap();
         let expansion_context = ExpansionContext {
             relative_to: dir,
             invoice_versioning: InvoiceVersioning::Production,
+            bindle_server_url: None,
         };
-        let invoice = expand(&hippofacts, &expansion_context).expect("error expanding");
+        let invoice = expand(&hippofacts, &expansion_context).await.expect("error expanding");
         Ok(invoice)
     }
 
-    #[test]
-    fn test_name_is_kept() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_name_is_kept() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!("weather", invoice.bindle.id.name());
     }
 
-    #[test]
-    fn test_route_is_mapped() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_route_is_mapped() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(
             "/fake",
             parcel_feature_value(&invoice, "out/fake.wasm", "wagi", "route")
         );
     }
 
-    #[test]
-    fn test_handler_parcel_is_not_asset() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_handler_parcel_is_not_asset() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(
             "false",
             parcel_feature_value(&invoice, "out/fake.wasm", "wagi", "file")
         );
     }
 
-    #[test]
-    fn test_group_is_created_per_handler() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_group_is_created_per_handler() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         let groups = invoice.group.as_ref().unwrap();
         assert_eq!(2, groups.len());
         assert_eq!("out/fake.wasm-files", groups[0].name);
         assert_eq!("out/lies.wasm-files", groups[1].name);
     }
 
-    #[test]
-    fn test_files_are_members_of_correct_groups() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_files_are_members_of_correct_groups() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(
             1,
             parcel_conditions(&invoice, "scripts/ignore.json")
@@ -445,24 +487,24 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_assets_parcels_are_marked_as_assets() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_assets_parcels_are_marked_as_assets() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(
             "true",
             parcel_feature_value(&invoice, "scripts/real.js", "wagi", "file")
         );
     }
 
-    #[test]
-    fn test_handler_parcels_are_not_members_of_groups() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_handler_parcels_are_not_members_of_groups() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(None, parcel_conditions(&invoice, "out/lies.wasm").member_of);
     }
 
-    #[test]
-    fn test_handlers_require_correct_groups() {
-        let invoice = expand_test_invoice("app1").unwrap();
+    #[tokio::test]
+    async fn test_handlers_require_correct_groups() {
+        let invoice = expand_test_invoice("app1").await.unwrap();
         assert_eq!(
             1,
             parcel_conditions(&invoice, "out/lies.wasm")
@@ -480,9 +522,9 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_if_no_files_key_then_no_asset_parcels() {
-        let invoice = expand_test_invoice("app2").unwrap();
+    #[tokio::test]
+    async fn test_if_no_files_key_then_no_asset_parcels() {
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let count = invoice
             .parcel
             .unwrap()
@@ -492,9 +534,9 @@ mod test {
         assert_eq!(0, count);
     }
 
-    #[test]
-    fn test_if_empty_files_key_then_no_asset_parcels() {
-        let invoice = expand_test_invoice("app2").unwrap();
+    #[tokio::test]
+    async fn test_if_empty_files_key_then_no_asset_parcels() {
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let count = invoice
             .parcel
             .unwrap()
@@ -504,9 +546,9 @@ mod test {
         assert_eq!(0, count);
     }
 
-    #[test]
-    fn test_if_no_files_match_then_no_asset_parcels() {
-        let invoice = expand_test_invoice("app2").unwrap();
+    #[tokio::test]
+    async fn test_if_no_files_match_then_no_asset_parcels() {
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let count = invoice
             .parcel
             .unwrap()
@@ -516,9 +558,9 @@ mod test {
         assert_eq!(0, count);
     }
 
-    #[test]
-    fn test_if_nonexistent_directory_then_no_asset_parcels() {
-        let invoice = expand_test_invoice("app2").unwrap();
+    #[tokio::test]
+    async fn test_if_nonexistent_directory_then_no_asset_parcels() {
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let count = invoice
             .parcel
             .unwrap()
@@ -528,10 +570,10 @@ mod test {
         assert_eq!(0, count);
     }
 
-    #[test]
-    fn test_if_file_does_not_exist_then_no_asset_parcels() {
+    #[tokio::test]
+    async fn test_if_file_does_not_exist_then_no_asset_parcels() {
         // TODO: I feel like this should be an error
-        let invoice = expand_test_invoice("app2").unwrap();
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let count = invoice
             .parcel
             .unwrap()
@@ -541,10 +583,10 @@ mod test {
         assert_eq!(0, count); // TODO: ?
     }
 
-    #[test]
-    fn test_if_handler_appears_as_an_asset_then_there_are_two_parcels_with_appropriate_membership_and_requirements_clauses(
+    #[tokio::test]
+    async fn test_if_handler_appears_as_an_asset_then_there_are_two_parcels_with_appropriate_membership_and_requirements_clauses(
     ) {
-        let invoice = expand_test_invoice("app2").unwrap();
+        let invoice = expand_test_invoice("app2").await.unwrap();
         let parcels = invoice.parcel.as_ref().unwrap();
         let count = parcels
             .iter()

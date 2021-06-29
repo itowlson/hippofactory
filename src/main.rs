@@ -180,12 +180,12 @@ async fn run(
     let expansion_context = ExpansionContext {
         relative_to: source_dir.clone(),
         invoice_versioning,
+        bindle_server_url: push_to.clone(),
     };
     let writer = BindleWriter::new(&source_dir, &destination);
 
-    let content = std::fs::read_to_string(&source)?;
-    let spec = toml::from_str::<HippoFacts>(&content)?;
-    let invoice = expander::expand(&spec, &expansion_context)?;
+    let spec = HippoFacts::read_from_file(&source)?;
+    let invoice = expander::expand(&spec, &expansion_context).await?;
     writer.write(&invoice).await?;
 
     if let Some(url) = &push_to {
