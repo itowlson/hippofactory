@@ -24,7 +24,7 @@ pub fn expand(
     hippofacts: &HippoFacts,
     expansion_context: &ExpansionContext,
 ) -> anyhow::Result<Invoice> {
-    let groups = expand_all_entries_to_groups(&hippofacts)?;
+    let groups = expand_all_entries_to_groups(&hippofacts);
     let handler_parcels = expand_module_entries_to_parcels(&hippofacts, expansion_context)?;
     let external_dependent_parcels =
         expand_all_external_ref_dependencies_to_parcels(&hippofacts, expansion_context)?;
@@ -63,9 +63,8 @@ fn expand_id(
     Ok(id)
 }
 
-fn expand_all_entries_to_groups(hippofacts: &HippoFacts) -> anyhow::Result<Vec<Group>> {
-    let groups = hippofacts.entries.iter().map(expand_to_group).collect();
-    Ok(groups)
+fn expand_all_entries_to_groups(hippofacts: &HippoFacts) -> Vec<Group> {
+    hippofacts.entries.iter().map(expand_to_group).collect()
 }
 
 fn expand_to_group(entry: &HippoFactsEntry) -> Group {
