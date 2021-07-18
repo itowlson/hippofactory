@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use bindle_writer::BindleWriter;
-use expander::{ExpansionContext, InvoiceVersioning};
+use expander::expansion_context::ExpansionContext;
+use expander::invoice_versioning::InvoiceVersioning;
 use hippofacts::{HippoFacts, HippoFactsEntry};
 
 mod bindle_pusher;

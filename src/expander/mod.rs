@@ -1,7 +1,10 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+pub mod expansion_context;
+pub mod invoice_versioning;
+
+use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
 use std::iter::FromIterator;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use bindle::{AnnotationMap, BindleSpec, Condition, Group, Invoice, Label, Parcel};
 use glob::GlobError;
@@ -11,58 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::bindle_utils::InvoiceHelpers;
 use crate::hippofacts::{ExternalRef, HippoFacts, HippoFactsEntry};
 
-pub struct ExpansionContext {
-    pub relative_to: PathBuf,
-    pub invoice_versioning: InvoiceVersioning,
-    pub external_invoices: HashMap<bindle::Id, Invoice>,
-}
-
-impl ExpansionContext {
-    pub fn to_absolute(&self, pattern: &str) -> String {
-        let absolute = self.relative_to.join(pattern);
-        absolute.to_string_lossy().to_string()
-    }
-
-    pub fn to_relative(&self, path: impl AsRef<Path>) -> anyhow::Result<String> {
-        let relative_path = path.as_ref().strip_prefix(&self.relative_to)?;
-        let relative_path_string = relative_path
-            .to_str()
-            .ok_or_else(|| anyhow::Error::msg("Can't convert back to relative path"))?
-            .to_owned()
-            .replace("\\", "/"); // TODO: a better way
-        Ok(relative_path_string)
-    }
-
-    pub fn mangle_version(&self, version: &str) -> String {
-        match self.invoice_versioning {
-            InvoiceVersioning::Dev => {
-                let user = current_user()
-                    .map(|s| format!("-{}", s))
-                    .unwrap_or_else(|| "".to_owned());
-                let timestamp = chrono::Local::now()
-                    .format("-%Y.%m.%d.%H.%M.%S.%3f")
-                    .to_string();
-                format!("{}{}{}", version, user, timestamp)
-            }
-            InvoiceVersioning::Production => version.to_owned(),
-        }
-    }
-}
-
-pub enum InvoiceVersioning {
-    Dev,
-    Production,
-}
-
-impl InvoiceVersioning {
-    pub fn parse(text: &str) -> Self {
-        if text == "production" {
-            InvoiceVersioning::Production
-        } else {
-            InvoiceVersioning::Dev
-        }
-    }
-}
+use expansion_context::ExpansionContext;
 
 pub fn expand(
     hippofacts: &HippoFacts,
@@ -473,12 +425,6 @@ fn check_for_name_clashes(
     Ok(())
 }
 
-fn current_user() -> Option<String> {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .ok()
-}
-
 fn file_id(parcel: &Parcel) -> String {
     // Two parcels with different names could refer to the same content.  We
     // don't want to treat them as the same parcel when deduplicating.
@@ -508,8 +454,11 @@ fn annotation_do_not_stage_file() -> Option<AnnotationMap> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::path::Path;
     use std::str::FromStr;
 
+    use super::invoice_versioning::InvoiceVersioning;
     use super::*;
 
     fn test_dir(name: &str) -> PathBuf {
