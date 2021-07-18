@@ -188,11 +188,11 @@ async fn run(
     // Do this outside the `expand` function so `expand` is more testable
     let external_invoices = prefetch_required_invoices(&spec, bindle_settings.bindle_url()).await?;
 
-    let expansion_context = ExpansionContext {
-        relative_to: source_dir.clone(),
+    let expansion_context = ExpansionContext::new(
+        source_dir.clone(),
         invoice_versioning,
         external_invoices,
-    };
+    );
 
     let invoice = expander::expand(&spec, &expansion_context)?;
 

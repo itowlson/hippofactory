@@ -1,17 +1,32 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use bindle::Invoice;
+use bindle::{Invoice, Parcel};
+
+use crate::expander::externals::find_handler_parcel;
+use crate::hippofacts;
 
 use super::invoice_versioning::InvoiceVersioning;
 
 pub struct ExpansionContext {
-    pub relative_to: PathBuf,
-    pub invoice_versioning: InvoiceVersioning,
-    pub external_invoices: HashMap<bindle::Id, Invoice>,
+    relative_to: PathBuf,
+    invoice_versioning: InvoiceVersioning,
+    external_invoices: HashMap<bindle::Id, Invoice>,
 }
 
 impl ExpansionContext {
+    pub fn new(
+        relative_to: PathBuf,
+        invoice_versioning: InvoiceVersioning,
+        external_invoices: HashMap<bindle::Id, Invoice>,
+    ) -> Self {
+        Self {
+            relative_to,
+            invoice_versioning,
+            external_invoices,
+        }
+    }
+
     pub fn to_absolute(&self, pattern: &str) -> String {
         let absolute = self.relative_to.join(pattern);
         absolute.to_string_lossy().to_string()
@@ -40,6 +55,18 @@ impl ExpansionContext {
             }
             InvoiceVersioning::Production => version.to_owned(),
         }
+    }
+
+    pub fn find_invoice(&self, id: &bindle::Id) -> Option<&Invoice> {
+        self.external_invoices.get(id)
+    }
+
+    pub fn find_handler_parcel<'a>(&'a self, external_ref: &'a hippofacts::ExternalRef) -> anyhow::Result<(&'a Invoice, &'a Parcel)> {
+        let invoice = self.find_invoice(&external_ref.bindle_id)
+            .ok_or_else(|| anyhow::anyhow!("external invoice not found on server"))?;
+        let parcel = find_handler_parcel(invoice, &external_ref.handler_id)
+           .ok_or_else(|| anyhow::anyhow!("external invoice does not contain specified parcel"))?;
+        Ok((invoice, parcel))
     }
 }
 

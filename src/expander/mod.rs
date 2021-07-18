@@ -151,12 +151,7 @@ fn expand_one_external_ref_dependencies_to_parcels(
     dest_group_name: &str,
 ) -> anyhow::Result<Vec<Parcel>> {
     let parcels = (|| {
-        let invoice = expansion_context
-            .external_invoices
-            .get(&external_ref.bindle_id)
-            .ok_or_else(|| anyhow::anyhow!("external invoice not found on server"))?;
-        let main_parcel = find_handler_parcel(invoice, &external_ref.handler_id)
-            .ok_or_else(|| anyhow::anyhow!("external invoice does not contain specified parcel"))?;
+        let (invoice, main_parcel) = expansion_context.find_handler_parcel(&external_ref)?;
         let required_parcels = invoice.parcels_required_by(&main_parcel);
         let parcel_copies = required_parcels.iter().map(|p| Parcel {
             label: Label {
@@ -296,14 +291,7 @@ fn convert_one_ref_to_parcel(
 ) -> anyhow::Result<Parcel> {
     // Immediate-call closure allows us to use the try operator
     let parcel = (|| {
-        // We don't need to give the IDs in these messages because these will be prepended when
-        // mapping errors that escape the closure (the parcel.map_err below)
-        let invoice = expansion_context
-            .external_invoices
-            .get(&external_ref.bindle_id)
-            .ok_or_else(|| anyhow::anyhow!("external invoice not found on server"))?;
-        let parcel = find_handler_parcel(invoice, &external_ref.handler_id)
-            .ok_or_else(|| anyhow::anyhow!("external invoice does not contain specified parcel"))?;
+        let (_, parcel) = expansion_context.find_handler_parcel(&external_ref)?;
 
         let feature = Some(wagi_feature_of(wagi_features));
 
@@ -432,11 +420,11 @@ mod test {
     fn expand_test_invoice(name: &str) -> anyhow::Result<Invoice> {
         let dir = test_dir(name);
         let hippofacts = read_hippofacts(dir.join("HIPPOFACTS")).unwrap();
-        let expansion_context = ExpansionContext {
-            relative_to: dir,
-            invoice_versioning: InvoiceVersioning::Production,
-            external_invoices: external_test_invoices(),
-        };
+        let expansion_context = ExpansionContext::new(
+            dir,
+            InvoiceVersioning::Production,
+            external_test_invoices(),
+        );
         expand(&hippofacts, &expansion_context)
     }
 
