@@ -2,6 +2,7 @@ pub mod expansion_context;
 pub mod invoice_versioning;
 mod collections;
 mod externals;
+mod merge;
 
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
@@ -10,7 +11,6 @@ use std::path::PathBuf;
 
 use bindle::{AnnotationMap, BindleSpec, Condition, Group, Invoice, Label, Parcel};
 use glob::GlobError;
-use itertools::Itertools;
 use sha2::{Digest, Sha256};
 
 use crate::bindle_utils::InvoiceHelpers;
@@ -19,6 +19,7 @@ use crate::hippofacts::{ExternalRef, HippoFacts, HippoFactsEntry};
 use expansion_context::ExpansionContext;
 use collections::*;
 use externals::*;
+use merge::merge_memberships;
 
 pub fn expand(
     hippofacts: &HippoFacts,
@@ -331,54 +332,6 @@ fn convert_one_ref_to_parcel(
     })
 }
 
-fn merge_memberships(parcels: Vec<Parcel>) -> Vec<Parcel> {
-    parcels
-        .into_iter()
-        .into_grouping_map_by(file_id)
-        .fold_first(|acc, _key, val| merge_parcel_into(acc, val))
-        .values()
-        .cloned() // into_values is not yet stable
-        .collect()
-}
-
-fn merge_parcel_into(first: Parcel, second: Parcel) -> Parcel {
-    Parcel {
-        label: first.label,
-        conditions: merge_parcel_conditions(first.conditions, second.conditions),
-    }
-}
-
-fn merge_parcel_conditions(
-    first: Option<Condition>,
-    second: Option<Condition>,
-) -> Option<Condition> {
-    match first {
-        None => second, // shouldn't happen
-        Some(first_condition) => match second {
-            None => Some(first_condition),
-            Some(second_condition) => {
-                Some(merge_condition_lists(first_condition, second_condition))
-            }
-        },
-    }
-}
-
-fn merge_condition_lists(first: Condition, second: Condition) -> Condition {
-    Condition {
-        member_of: merge_lists(first.member_of, second.member_of),
-        requires: first.requires,
-    }
-}
-
-fn merge_lists(first: Option<Vec<String>>, second: Option<Vec<String>>) -> Option<Vec<String>> {
-    match (first, second) {
-        (None, None) => None,
-        (some, None) => some,
-        (None, some) => some,
-        (Some(list1), Some(list2)) => Some(vec![list1, list2].concat()),
-    }
-}
-
 fn check_for_name_clashes(
     external_dependent_parcels: &Vec<Parcel>,
     file_parcels: &Vec<Parcel>,
@@ -396,12 +349,6 @@ fn check_for_name_clashes(
         }
     }
     Ok(())
-}
-
-fn file_id(parcel: &Parcel) -> String {
-    // Two parcels with different names could refer to the same content.  We
-    // don't want to treat them as the same parcel when deduplicating.
-    format!("{}@{}", parcel.label.sha256, parcel.label.name)
 }
 
 fn wagi_feature_of(values: Vec<(&str, &str)>) -> BTreeMap<String, BTreeMap<String, String>> {

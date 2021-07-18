@@ -1,5 +1,14 @@
 use std::collections::BTreeMap;
 
+pub fn merge_lists(first: Option<Vec<String>>, second: Option<Vec<String>>) -> Option<Vec<String>> {
+    match (first, second) {
+        (None, None) => None,
+        (some, None) => some,
+        (None, some) => some,
+        (Some(list1), Some(list2)) => Some(vec![list1, list2].concat()),
+    }
+}
+
 pub fn flatten_or_fail<I, T>(source: I) -> anyhow::Result<Vec<T>>
 where
     I: IntoIterator<Item = anyhow::Result<Vec<T>>>,
