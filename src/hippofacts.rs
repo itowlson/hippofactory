@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom};
 
+use crate::build_condition::BuildConditionExpression;
+
 // type FeatureMap = BTreeMap<String, BTreeMap<String, String>>;
 
 type AnnotationMap = BTreeMap<String, String>;
@@ -26,6 +28,7 @@ pub struct BindleSpec {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawHandler {
+    pub condition: Option<String>,
     pub name: Option<String>,
     pub external: Option<RawExternalRef>,
     pub route: String,
@@ -54,12 +57,14 @@ pub struct HippoFacts {
 }
 
 pub struct LocalHandler {
+    pub condition: BuildConditionExpression,
     pub name: String,
     pub route: String,
     pub files: Option<Vec<String>>,
 }
 
 pub struct ExternalHandler {
+    pub condition: BuildConditionExpression,
     pub external: ExternalRef,
     pub route: String,
     pub files: Option<Vec<String>>,
@@ -77,6 +82,7 @@ pub struct ExternalRef {
 }
 
 pub struct Export {
+    pub condition: BuildConditionExpression,
     pub name: String,
     pub id: String,
     pub files: Vec<String>,
@@ -139,11 +145,13 @@ impl TryFrom<&RawHandler> for HippoFactsEntry {
         }?;
         let entry = match handler_module {
             HandlerModule::File(name) => Self::LocalHandler(LocalHandler {
+                condition: BuildConditionExpression::None,
                 name,
                 route: raw.route.clone(),
                 files: raw.files.clone(),
             }),
             HandlerModule::External(external) => Self::ExternalHandler(ExternalHandler {
+                condition: BuildConditionExpression::None,
                 external,
                 route: raw.route.clone(),
                 files: raw.files.clone(),
@@ -170,6 +178,7 @@ impl TryFrom<&RawExport> for HippoFactsEntry {
 
     fn try_from(raw: &RawExport) -> anyhow::Result<Self> {
         Ok(Self::Export(Export {
+            condition: BuildConditionExpression::None,
             id: raw.id.clone(),
             name: raw.name.clone(),
             files: raw.files.clone().unwrap_or_default(),

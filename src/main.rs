@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bindle_writer::BindleWriter;
+use build_condition::BuildConditionOptions;
 use expander::{ExpansionContext, InvoiceVersioning};
 use hippofacts::{HippoFacts, HippoFactsEntry};
 use itertools::Itertools;
@@ -8,6 +9,7 @@ use itertools::Itertools;
 mod bindle_pusher;
 mod bindle_utils;
 mod bindle_writer;
+mod build_condition;
 mod expander;
 mod hippo_notifier;
 mod hippofacts;
@@ -183,7 +185,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run(
     source: impl AsRef<std::path::Path>,
     destination: impl AsRef<std::path::Path>,
-    build_config_options: HashMap<String, String>,
+    build_config_options: BuildConditionOptions,
     invoice_versioning: InvoiceVersioning,
     output_format: OutputFormat,
     bindle_settings: BindleSettings,
@@ -272,9 +274,10 @@ fn external_bindle_id(entry: &HippoFactsEntry) -> Option<bindle::Id> {
     entry.external_ref().map(|ext| ext.bindle_id.clone())
 }
 
-fn parse_build_config_options(source: Option<clap::Values>) -> anyhow::Result<HashMap<String, String>> {
+fn parse_build_config_options(source: Option<clap::Values>) -> anyhow::Result<BuildConditionOptions> {
     let entries = source.unwrap_or_default().map(parse_build_config_option);
-    entries.collect::<anyhow::Result<HashMap<_, _>>>()
+    let entries_map = entries.collect::<anyhow::Result<HashMap<_, _>>>()?;
+    Ok(BuildConditionOptions::from(entries_map))
 }
 
 fn parse_build_config_option(source: &str) -> anyhow::Result<(String, String)> {

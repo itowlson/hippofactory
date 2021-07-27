@@ -9,13 +9,14 @@ use itertools::Itertools;
 use sha2::{Digest, Sha256};
 
 use crate::bindle_utils::InvoiceHelpers;
+use crate::build_condition::BuildConditionOptions;
 use crate::hippofacts::{ExternalRef, HippoFacts, HippoFactsEntry};
 
 pub struct ExpansionContext {
     pub relative_to: PathBuf,
     pub invoice_versioning: InvoiceVersioning,
     pub external_invoices: HashMap<bindle::Id, Invoice>,
-    pub build_config_options: HashMap<String, String>,
+    pub build_config_options: BuildConditionOptions,
 }
 
 impl ExpansionContext {
@@ -584,7 +585,7 @@ mod test {
             relative_to: dir,
             invoice_versioning: InvoiceVersioning::Production,
             external_invoices: external_test_invoices(),
-            build_config_options: HashMap::new(),
+            build_config_options: BuildConditionOptions::none(),
         };
         expand(&hippofacts, &expansion_context)
     }
