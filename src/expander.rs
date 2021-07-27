@@ -15,6 +15,7 @@ pub struct ExpansionContext {
     pub relative_to: PathBuf,
     pub invoice_versioning: InvoiceVersioning,
     pub external_invoices: HashMap<bindle::Id, Invoice>,
+    pub build_config_options: HashMap<String, String>,
 }
 
 impl ExpansionContext {
@@ -583,6 +584,7 @@ mod test {
             relative_to: dir,
             invoice_versioning: InvoiceVersioning::Production,
             external_invoices: external_test_invoices(),
+            build_config_options: HashMap::new(),
         };
         expand(&hippofacts, &expansion_context)
     }

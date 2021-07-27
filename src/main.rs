@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use bindle_writer::BindleWriter;
 use expander::{ExpansionContext, InvoiceVersioning};
 use hippofacts::{HippoFacts, HippoFactsEntry};
+use itertools::Itertools;
 
 mod bindle_pusher;
 mod bindle_utils;
@@ -12,6 +13,7 @@ mod hippo_notifier;
 mod hippofacts;
 
 const ARG_HIPPOFACTS: &str = "hippofacts_path";
+const ARG_BUILD_CONFIG: &str = "build_config_options";
 const ARG_STAGING_DIR: &str = "output_dir";
 const ARG_OUTPUT: &str = "output_format";
 const ARG_VERSIONING: &str = "versioning";
@@ -37,6 +39,14 @@ async fn main() -> anyhow::Result<()> {
                 .required(true)
                 .index(1)
                 .about("The artifacts spec (file or directory containing HIPPOFACTS file)"),
+        )
+        .arg(
+            clap::Arg::new(ARG_BUILD_CONFIG)
+                .multiple_occurrences(true)
+                .required(false)
+                .short('c')
+                .long("build-config")
+                .about("Build config options for conditional spec entries, in the form key=value")
         )
         .arg(
             clap::Arg::new(ARG_STAGING_DIR)
@@ -129,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let hippo_username = args.value_of(ARG_HIPPO_USERNAME);
     let hippo_password = args.value_of(ARG_HIPPO_PASSWORD);
+    let build_config_options = parse_build_config_options(args.values_of(ARG_BUILD_CONFIG))?;
 
     let notify_to = hippo_url.map(|url| hippo_notifier::ConnectionInfo {
         url,
@@ -160,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
     run(
         &source,
         &destination,
+        build_config_options,
         invoice_versioning,
         output_format,
         bindle_settings,
@@ -171,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run(
     source: impl AsRef<std::path::Path>,
     destination: impl AsRef<std::path::Path>,
+    build_config_options: HashMap<String, String>,
     invoice_versioning: InvoiceVersioning,
     output_format: OutputFormat,
     bindle_settings: BindleSettings,
@@ -191,6 +204,7 @@ async fn run(
         relative_to: source_dir.clone(),
         invoice_versioning,
         external_invoices,
+        build_config_options,
     };
 
     let invoice = expander::expand(&spec, &expansion_context)?;
@@ -256,6 +270,20 @@ async fn prefetch_required_invoices(
 
 fn external_bindle_id(entry: &HippoFactsEntry) -> Option<bindle::Id> {
     entry.external_ref().map(|ext| ext.bindle_id.clone())
+}
+
+fn parse_build_config_options(source: Option<clap::Values>) -> anyhow::Result<HashMap<String, String>> {
+    let entries = source.unwrap_or_default().map(parse_build_config_option);
+    entries.collect::<anyhow::Result<HashMap<_, _>>>()
+}
+
+fn parse_build_config_option(source: &str) -> anyhow::Result<(String, String)> {
+    let bits = source.split('=').collect_vec();
+    if bits.len() == 2 {
+        Ok( (bits[0].to_owned(), bits[1].to_owned()) )
+    } else {
+        Err(anyhow::anyhow!("{} is not in key=value format", source))
+    }
 }
 
 enum OutputFormat {
